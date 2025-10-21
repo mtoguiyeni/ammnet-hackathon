@@ -43,6 +43,9 @@ apply string-distance algorithms, use interactive review for ambiguous cases,
 and build a reusable cache of corrections for future datasets.*
 :::
 
+{{< video https://www.youtube.com/embed/GCMXwoITHZE?si=9i_lRnyXzq57mDFH >}}
+
+
 ## Overview
 
 Welcome back! In this post, we turn our attention to one of the most persistent challenges in public health data management: cleaning and standardising geographic names.

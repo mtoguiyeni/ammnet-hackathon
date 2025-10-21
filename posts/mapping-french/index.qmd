@@ -1,0 +1,292 @@
+---
+title: "Cartographie sous R – AMMnet Hackathon"
+author: "Dr Ousmane Diao"
+date: "28 Octobre 2025"
+lang: fr
+format:
+  html:
+    embed-resources: false
+    toc: true
+    toc-depth: 2
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Introduction
+
+Ce document consiste a faire de la cartographie avec des commentaires **en français**.
+
+> **Pré-requis** : R ≥ 4.2, et les packages `sf`, `tmap`, `ggspatial`, `ggrepel`, `tidyverse`, `malariaAtlas`.
+
+```{r}
+# (Optionnel) Installer les packages si nécessaire
+# install.packages(c("sf", "tmap", "ggspatial", "ggrepel", "tidyverse"))
+# remotes::install_github("malaria-atlas-project/malariaAtlas")
+```
+
+# Téléchargement des données
+
+```{r}
+# Télécharger et décompresser les données (AMMnet Hackathon)
+url <- "https://raw.githubusercontent.com/AMMnet/AMMnet-Hackathon/main/03_mapping-r/data.zip"
+download.file(url, "data.zip", mode = "wb")
+unzip("data.zip", exdir = ".")
+```
+
+# Chargement des bibliothèques
+
+```{r}
+library(sf)
+library(tmap)
+library(ggspatial)
+library(ggrepel)
+library(tidyverse)
+library(malariaAtlas)
+```
+
+# Données spatiales : polygones et points
+
+```{r}
+# Importer le shapefile des régions (Admin1) de Tanzanie
+tz_admin1 <- st_read("data/shapefiles/TZ_admin1.shp", quiet = TRUE)
+tz_admin1
+```
+
+```{r}
+# Charger les données ponctuelles PfPR (MIS Tanzanie 2017)
+tz_pr <- readr::read_csv("data/pfpr-mis-tanzania-clean.csv", show_col_types = FALSE)
+head(tz_pr)
+```
+
+```{r}
+# Convertir les points en objet 'sf' (WGS84)
+tz_pr_points <- st_as_sf(tz_pr, coords = c("longitude", "latitude"), crs = 4326)
+tz_pr_points
+```
+
+# Premières cartes avec *ggplot2*
+
+```{r}
+# Carte simple des régions
+ggplot(tz_admin1) +
+  geom_sf() +
+  theme_bw() +
+  labs(title = "Régions de Tanzanie")
+```
+
+```{r}
+# Carte régions + points PfPR (données data.frame)
+ggplot() +
+  geom_sf(tz_admin1, mapping = aes(geometry = geometry)) +
+  geom_point(tz_pr, mapping = aes(x = longitude, y = latitude, color = pf_pr)) +
+  scale_color_distiller(palette = "Spectral") +
+  theme_bw() +
+  labs(color = "PfPR, 0–5 ans")
+```
+
+```{r}
+# Carte régions + points PfPR (objets sf uniquement)
+ggplot() +
+  geom_sf(tz_admin1, mapping = aes(geometry = geometry)) +
+  geom_sf(tz_pr_points, mapping = aes(geometry = geometry, color = pf_pr)) +
+  scale_color_distiller(palette = "Spectral") +
+  theme_minimal() +
+  labs(title = "Prévalence du paludisme 0–5 ans — MIS Tanzanie 2017",
+       color = "PfPR")
+```
+
+# Jointure des données de population (Admin1)
+## OBJECTIF :
+Charger la table de population Admin1, harmoniser les noms de régions
+pour qu’ils correspondent à ceux du shapefile (tz_admin1), puis
+vérifier la concordance avant de joindre les données.
+```{r}
+# 1) Charger la population Admin1 depuis un CSV (affichage des types désactivé)
+tz_pop_adm1 <- readr::read_csv("data/tza_admpop_adm1_2020_v2.csv", show_col_types = FALSE)
+
+# 2) Harmoniser les noms pour correspondre au shapefile
+#    - str_to_title() met les noms en « Titre » (première lettre en majuscule)
+#    - case_when() corrige manuellement les divergences connues entre sources
+tz_pop_adm1 <- tz_pop_adm1 %>%
+  dplyr::mutate(name_1 = stringr::str_to_title(ADM1_EN)) %>%
+  dplyr::mutate(
+    name_1 = dplyr::case_when(
+      name_1 == "Dar Es Salaam" ~ "Dar-es-salaam",
+      name_1 == "Pemba North" ~ "Kaskazini Pemba",
+      name_1 == "Pemba South" ~ "Kusini Pemba",
+      name_1 == "Zanzibar North" ~ "Kaskazini Unguja",
+      name_1 == "Zanzibar Central/South" ~ "Kusini Unguja",
+      name_1 == "Zanzibar Urban/West" ~ "Mjini Magharibi",
+      name_1 == "Coast" ~ "Pwani",
+      TRUE ~ as.character(name_1)  # conserver les autres noms tels quels
+    )
+  )
+
+# 3) Vérifier la concordance des noms entre le shapefile (tz_admin1$name_1)
+#    et la table de population harmonisée (tz_pop_adm1$name_1)
+#    - TRUE = correspondance trouvée ; FALSE = pas de correspondance
+table(tz_admin1$name_1 %in% tz_pop_adm1$name_1)
+
+# (Optionnel) Lister explicitement les noms du shapefile non retrouvés dans la population
+# unmatched <- setdiff(tz_admin1$name_1, tz_pop_adm1$name_1)
+# if (length(unmatched)) {
+#   message("Noms non appariés (shapefile → population) :")
+#   print(unmatched)
+# }
+
+# (Étape suivante typique, non incluse ici) :
+# tz_pop_admin1 <- tz_admin1 %>% dplyr::left_join(tz_pop_adm1, by = "name_1")
+
+```
+
+```{r}
+# Joindre population au shapefile
+tz_pop_admin1 <- tz_admin1 %>% left_join(tz_pop_adm1, by = "name_1")
+```
+
+```{r}
+# Carte de population totale (lacs en bleu clair, transformation racine)
+ggplot(tz_pop_admin1) +
+  geom_sf(mapping = aes(fill = T_TL)) +
+  scale_fill_viridis_c(option = "B", na.value = "lightblue", trans = "sqrt") +
+  theme_bw() +
+  labs(title = "Population en Tanzanie (2020)",
+       fill  = "Population totale")
+```
+
+# Attribution régionale des points PfPR et agrégation
+
+```{r}
+# Désactive la géométrie sphérique 's2' et repasse sur GEOS (plan)
+# Utile quand certaines opérations de jointure/validation échouent avec s2
+# (ex. géométries invalides, buffers en degrés, incohérences topologiques).
+# ⚠️ Pense à éventuellement réactiver plus tard : sf_use_s2(TRUE)
+sf_use_s2(FALSE)
+
+# Jointure spatiale : pour chaque POINT de tz_pr_points, on récupère
+# l'attribut du POLYGONE (tz_admin1) qui le contient.
+# Par défaut, le prédicat est st_intersects (point-dans-polygone).
+# Résultat : un sf de points enrichi des colonnes de tz_admin1 (dont name_1).
+tz_pr_point_region <- st_join(tz_pr_points, tz_admin1)
+
+# Agrégation par région :
+tz_region_map <- tz_pr_point_region %>%
+  ungroup() %>%                 # s'assurer qu'aucun groupement antérieur n'est actif
+  group_by(name_1) %>%          # regrouper tous les points par nom de région (Admin1)
+  summarise(
+    # moyenne non pondérée du PfPR par région ;
+    # si besoin, remplacer par une moyenne pondérée (taille d'échantillon, population, etc.)
+    mean_pr = mean(pf_pr, na.rm = TRUE)
+  ) %>%
+  st_drop_geometry() %>%        # on retire la géométrie des points (on garde un data.frame agrégé)
+  # Rejoindre la table agrégée aux polygones pour obtenir un objet sf polygonal
+  # contenant la colonne 'mean_pr' par région.
+  left_join(tz_admin1, ., by = "name_1")
+
+```
+
+```{r}
+# Carte de PfPR moyen par région
+ggplot(tz_region_map) +
+  geom_sf(mapping = aes(fill = mean_pr)) +
+  scale_fill_distiller(palette = "Spectral", na.value = "lightblue") +
+  theme_bw() +
+  labs(fill = "PfPR moyen, 0–5 ans",
+       title = "Prévalence par région en Tanzanie",
+       subtitle = "MIS 2017")
+```
+
+# Tampons (buffers) et projections
+
+```{r}
+# Créer un buffer ~20 km autour des points (≈ 0,2° près de l’équateur)
+tz_pf_buffer_20km <- st_buffer(tz_pr_points, dist = 0.2)
+
+ggplot(tz_admin1) +
+  geom_sf() +
+  geom_sf(tz_pf_buffer_20km, mapping = aes(geometry = geometry), alpha = 0.2) +
+  geom_sf(tz_pr_points, mapping = aes(color = pf_pr), size = 0.6) +
+  scale_color_distiller(palette = "Spectral") +
+  labs(color = "PfPR, 0–5 ans", subtitle = "MIS 2017") +
+  theme_minimal()
+```
+
+```{r}
+# Vérifier / changer la projection (UTM zone 35S, EPSG:32735)
+st_crs(tz_admin1)
+st_crs(tz_pr_points)
+
+tz_admin1_utm   <- st_transform(tz_admin1, 32735)
+tz_pr_points_utm <- st_transform(tz_pr_points, 32735)
+```
+
+# Carte « prête pour publication »
+
+```{r}
+# Ajouter flèche du nord et barre d’échelle
+publication_pr_map <- ggplot(tz_region_map) +
+  geom_sf(mapping = aes(fill = mean_pr)) +
+  scale_fill_distiller(palette = "Spectral", na.value = "lightblue") +
+  annotation_north_arrow(location = "tr", height = unit(0.5, "cm"), width = unit(0.5, "cm")) +
+  annotation_scale(location = "bl") +
+  theme_void() +
+  labs(fill = "PfPR moyen, 0–5 ans",
+       title = "Prévalence par région en Tanzanie",
+       subtitle = "MIS 2017")
+
+publication_pr_map
+```
+
+```{r}
+# (Optionnel) Ajouter les noms de régions
+publication_pr_map +
+  geom_sf_text(mapping = aes(label = name_1), size = 1.5)
+```
+
+# Export des résultats
+
+```{r}
+# Exporter la figure et un shapefile exemple
+#ggsave(filename = "tanzania_pr_map_2017.png", plot = publication_pr_map, width = 8, height = 6, dpi = 300)
+
+# Shapefile population enrichie
+#st_write(tz_pop_admin1, "data/shapefiles/tz_population_admin1.shp", delete_layer = TRUE)
+
+# Shapefile des seules régions
+tz_region_only <- dplyr::filter(tz_admin1, type_1 == "Region")
+#st_write(tz_region_only, "data/shapefiles/tz_regions_only.shp", delete_layer = TRUE)
+```
+
+# Cartes interactives (*tmap*)
+
+```{r}
+# Polygones simples
+tm_shape(tz_admin1) + tm_polygons()
+```
+
+```{r}
+# Carte population avec palette viridis (classes 'pretty')
+tm_shape(tz_pop_admin1) +
+  tm_polygons("T_TL",
+              palette = "viridis",
+              title   = "Population",
+              style   = "pretty", n = 4,
+              colorNA = "lightblue", textNA = "lacs") +
+  tm_layout(legend.outside = TRUE)
+```
+
+```{r}
+# Mode interactif
+tmap_mode("view")
+
+tm_shape(tz_pop_admin1) +
+  tm_polygons("T_TL",
+              id      = "name_1",   # étiquette interactive par région
+              palette = "viridis",
+              title   = "Population",
+              style   = "pretty", n = 4,
+              colorNA = "lightblue", textNA = "lacs") +
+  tm_layout(legend.outside = TRUE)
+```
